@@ -15,6 +15,8 @@ import io
 import base64
 import re
 import anthropic
+from dotenv import load_dotenv
+load_dotenv()
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -78,37 +80,28 @@ def _render_frame_png(out, t: int, fig_size=(5, 5)) -> str:
 _SYSTEM_PROMPT = """You are an expert computational biologist analyzing T-cell swarm dynamics from active matter simulations.
 
 IMAGE LEGEND:
-- Each colored dot = one T cell (N~200 cells in a periodic 2D domain)
-- Dot color (viridis scale, yellow→green→blue→purple):
-    • Yellow/green  = high receptor sensitivity (fresh, responsive receptors)
-    • Blue/purple   = low sensitivity (desensitized receptors, recently in high chemokine)
-- Orange/red background heatmap = chemokine concentration field (the T cells' attractant)
-- Red star = infection/chemokine source (could represent a pathogen, tumor, or inflamed tissue)
-- Frame title = elapsed simulation time in minutes
+- Colored dots = T cells. Color = receptor sensitivity (viridis): yellow/green = sensitive (fresh), blue/purple = desensitized (recently in high chemokine, CCR5/CXCR3 internalized via β-arrestin)
+- Orange/red heatmap = chemokine concentration (the attractant)
+- Red star = infection/chemokine source (pathogen, tumor, or inflamed tissue)
+- Frame title = elapsed time in minutes
 
-BIOLOGICAL MAPPINGS (use these to ground your analysis):
-- Heavy clustering at the source → acute inflammation / active immune response
-- Cells accumulating then rapidly purple-ing → receptor desensitization (β-arrestin internalization of CCR5/CXCR3)
-- Swarm forms, persists, then disperses → healthy self-limiting immune response
-- Swarm never disperses / grows denser over time → chronic inflammation risk
-- Purple wave radiating outward from source → desensitization-driven dispersal (biochemical off-switch)
-- Coherent streams leaving the cluster → streaming dispersal (ordered, high polar order)
-- Cells scattering diffusely → diffuse dispersal (disordered, low polar order)
-- Rotating ring or vortex pattern → collective rotational motion (common in confined swarms)
-- All cells yellow/green throughout → no desensitization, swarm stuck at source (immune exhaustion risk)
-- Cells uniformly distributed, no cluster → no effective chemotaxis or infection signal too weak
+BIOLOGICAL MAPPINGS:
+- Tight cluster at source = active immune response / inflammation
+- Cells purple-ing at source then dispersing = healthy self-limiting response (desensitization off-switch)
+- Cluster never disperses / grows = chronic inflammation risk
+- Coherent streams leaving = streaming dispersal (ordered)
+- Cells scatter randomly = diffuse dispersal
+- Rotating ring = collective vortex motion
+- All yellow throughout = no desensitization, cells stuck (exhaustion risk)
+- Uniform spread, no cluster = weak/no infection signal
 
-TASK:
-You will receive a sequence of simulation frames in chronological order.
-Provide a structured biological analysis covering:
-1. Is there an active infection/immune response? (Yes/No + confidence)
-2. Inflammation level: None / Mild / Moderate / Severe / Chronic
-3. Current swarm phase at the final frame: Aggregating / Stable-Swarm / Dispersing / Dispersed / Oscillating
-4. Dispersal mode (if dispersal is occurring): Streaming / Diffuse / None
-5. Key observable phenomena (bulleted, 3–6 points)
-6. Biological interpretation and clinical relevance (2–4 sentences)
+OUTPUT FORMAT — you MUST use exactly these labeled lines first, then your note:
 
-Be specific — reference timing (from the frame titles), spatial patterns, color distributions, and dynamics you actually observe across the frames. Distinguish clearly between what you see and what you infer.
+INFECTION: Yes or No
+INFLAMMATION: None or Mild or Moderate or Severe or Chronic
+PHASE: Aggregating or Stable-Swarm or Dispersing or Dispersed or Oscillating
+DISPERSAL: Streaming or Diffuse or None
+NOTE: One or two plain sentences describing the key biological story you see across the frames.
 """
 
 
@@ -178,39 +171,32 @@ def analyze_simulation(out: dict, n_frames: int = 6) -> dict:
 # ---------------------------------------------------------------------------
 
 def _parse_response(text: str) -> dict:
-    """Extract structured fields from Claude's free-text response."""
+    """Extract structured fields from Claude's strict labeled response."""
 
-    def _find(pattern, default="Unknown"):
-        m = re.search(pattern, text, re.IGNORECASE)
-        return m.group(1).strip() if m else default
+    def _find(label, options, default):
+        m = re.search(rf"^{label}:\s*({'|'.join(options)})", text, re.IGNORECASE | re.MULTILINE)
+        return m.group(1).capitalize() if m else default
 
-    # Infection detected
-    infect_str = _find(r"infection[^:]*:\s*(yes|no)", "Unknown")
-    infection_detected = infect_str.lower() == "yes"
+    infection_raw = _find("INFECTION", ["Yes", "No"], "No")
+    infection_detected = infection_raw.lower() == "yes"
 
     inflammation_level = _find(
-        r"inflammation[^:]*:\s*(None|Mild|Moderate|Severe|Chronic)", "Unknown"
+        "INFLAMMATION", ["Chronic", "Severe", "Moderate", "Mild", "None"], "Mild"
     )
     phase = _find(
-        r"(?:swarm\s+)?phase[^:]*:\s*(Aggregating|Stable-Swarm|Stable Swarm|Dispersing|Dispersed|Oscillating)",
-        "Unknown",
+        "PHASE", ["Stable-Swarm", "Aggregating", "Dispersing", "Dispersed", "Oscillating"], "Aggregating"
     )
-    phase = phase.replace("Stable Swarm", "Stable-Swarm")
+    dispersal_mode = _find("DISPERSAL", ["Streaming", "Diffuse", "None"], "None")
 
-    dispersal_mode = _find(
-        r"dispersal mode[^:]*:\s*(Streaming|Diffuse|None)", "None"
-    )
-
-    # Extract bullet-point observations
-    obs_lines = re.findall(r"[-•*]\s+(.+)", text)
-    observations = [line.strip() for line in obs_lines if len(line.strip()) > 10]
+    note_m = re.search(r"^NOTE:\s*(.+)", text, re.IGNORECASE | re.MULTILINE)
+    note = note_m.group(1).strip() if note_m else text.strip().splitlines()[-1]
 
     return {
         "infection_detected": infection_detected,
         "inflammation_level": inflammation_level,
         "phase": phase,
         "dispersal_mode": dispersal_mode,
-        "observations": observations,
+        "note": note,
     }
 
 
@@ -229,15 +215,7 @@ def print_analysis(result: dict) -> None:
     print(f"  Swarm phase        : {result['phase']}")
     print(f"  Dispersal mode     : {result['dispersal_mode']}")
     print(sep)
-    print("  KEY OBSERVATIONS")
-    for obs in result["observations"]:
-        print(f"    • {obs}")
-    print(sep)
-    print("  FULL ANALYSIS")
-    print()
-    # Indent for readability
-    for line in result["full_analysis"].splitlines():
-        print(f"  {line}")
+    print(f"  {result.get('note', '')}")
     print(sep)
 
 
