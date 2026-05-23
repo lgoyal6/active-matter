@@ -18,7 +18,7 @@ def snapshot_panels(out, frames=(0.0, 0.25, 0.5, 1.0), fname="swarm_snapshots.pn
     p = out["params"]
     L = out["box_size"]
     L_um = to_microns(L, p)                                     # box size in microns
-    src_um = to_microns(np.array(out["source_position"]), p)
+    srcs_um = to_microns(np.array(out.get("source_positions", [out["source_position"]])), p)
     field = out["chemokine_field"]
     n_steps = out["positions"].shape[0]
 
@@ -27,14 +27,15 @@ def snapshot_panels(out, frames=(0.0, 0.25, 0.5, 1.0), fname="swarm_snapshots.pn
         t = min(int(frac * n_steps), n_steps - 1)
         pos_um = to_microns(out["positions"][t], p)             # cells in microns
         sens = out["sensitivity"][t]
+        field_t = field[t] if field.ndim == 3 else field
 
         # chemokine field as background heatmap (extent in microns)
-        ax.imshow(field, extent=[0, L_um, 0, L_um], origin="lower",
+        ax.imshow(field_t, extent=[0, L_um, 0, L_um], origin="lower",
                   cmap="Greys", alpha=0.6)
         # cells colored by sensitivity (1 = fresh receptors, 0 = desensitized)
         sc = ax.scatter(pos_um[:, 0], pos_um[:, 1], c=sens, cmap="viridis",
                         vmin=0, vmax=1, s=14, edgecolors="none")
-        ax.plot(*src_um, "r*", ms=16)                           # chemokine source
+        ax.plot(srcs_um[:, 0], srcs_um[:, 1], "r*", ms=16)       # chemokine sources
         ax.set_xlim(0, L_um); ax.set_ylim(0, L_um)
         ax.set_title(f"t = {to_minutes(t, p):.0f} min")
         ax.set_xlabel("x (µm)")
@@ -50,9 +51,11 @@ def snapshot_panels(out, frames=(0.0, 0.25, 0.5, 1.0), fname="swarm_snapshots.pn
 def aggregation_curve(out, fname="aggregation_curve.png"):
     """Mean distance-to-source vs time -- the swarm forming and (if alpha>0) dispersing."""
     p = out["params"]
-    src = np.array(out["source_position"]); L = out["box_size"]
-    d = _min_image(out["positions"] - src, L)                  # (n_steps, N, 2)
-    mean_d_um = to_microns(np.linalg.norm(d, axis=2).mean(axis=1), p)   # microns
+    srcs = np.array(out.get("source_positions", [out["source_position"]]))
+    L = out["box_size"]
+    d = _min_image(out["positions"][:, :, None, :] - srcs[None, None, :, :], L)
+    nearest = np.linalg.norm(d, axis=3).min(axis=2)
+    mean_d_um = to_microns(nearest.mean(axis=1), p)            # microns
     mean_s = out["sensitivity"].mean(axis=1)
     t_min = to_minutes(np.arange(out["positions"].shape[0]), p)        # minutes
 
@@ -72,8 +75,15 @@ def aggregation_curve(out, fname="aggregation_curve.png"):
 
 
 if __name__ == "__main__":
-    # A run that shows the full story: cells swarm in, desensitize, then disperse.
-    out = simulate({"n_steps": 2000, "alpha": 0.4, "k_rep": 8.0}, seed=7)
+    # A run that shows the full story: swarm in, desensitize, leave, recover, return.
+    out = simulate({
+        "n_steps": 2600,
+        "alpha": 0.45,
+        "beta": 0.25,
+        "recovery_K": 0.6,
+        "w_escape": 3.0,
+        "k_rep": 6.0,
+    }, seed=7)
     print(f"run spans {to_minutes(out['positions'].shape[0], out['params']):.0f} min "
           f"in a {to_microns(out['box_size'], out['params']):.0f} µm box")
     snapshot_panels(out)
