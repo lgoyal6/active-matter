@@ -39,6 +39,7 @@ if _BACKEND is None:
              "    source .venv/bin/activate && python interactive_sim.py")
 print(f"[interactive] using backend: {_BACKEND}")
 
+import threading
 import numpy as np
 from matplotlib.widgets import Slider, Button, RadioButtons
 
@@ -55,7 +56,8 @@ DIRTY    = "#e07a3f"     # "changed, needs re-run" orange
 OKGREEN  = "#2f8f4e"
 RUN_CLR  = "#43aa8b"
 PLAY_CLR = "#577590"
-RESET_CLR= "#d9d5cc"
+RESET_CLR  = "#d9d5cc"
+ANALYZE_CLR= "#7b5ea7"
 TEXT     = "#2b2b2b"
 FIELD_CMAP = "magma"
 MAIN_RECT = [0.055, 0.405, 0.50, 0.455]
@@ -231,12 +233,16 @@ class SwarmExplorer:
         self.btn_play  = self._button([0.765, by, 0.085, 0.05], "▶ Play", PLAY_CLR)
         self.btn_reset = self._button([0.858, by, 0.062, 0.05], "Reset", RESET_CLR,
                                       text_color=TEXT)
-        selector_y = by - 0.112
+        self.btn_analyze = self._button([0.685, by - 0.062, 0.235, 0.048],
+                                        "Analyze with Claude", ANALYZE_CLR)
+        self.btn_analyze.label.set_fontsize(9.5)
+        selector_y = by - 0.132
         self.btn_chem = self._button([0.800, selector_y, 0.120, 0.072],
                                      "Chem: static", RESET_CLR, text_color=TEXT)
         self.btn_run.on_clicked(lambda _e: self.run())
         self.btn_play.on_clicked(lambda _e: self.toggle_play())
         self.btn_reset.on_clicked(lambda _e: self.reset())
+        self.btn_analyze.on_clicked(lambda _e: self.analyze())
         self.btn_chem.on_clicked(lambda _e: self.toggle_dynamic_chemokine())
 
         # ---- dimension radio ----
@@ -296,7 +302,8 @@ class SwarmExplorer:
         self.btn_run.ax.set_position([0.685, by, 0.072, 0.05])
         self.btn_play.ax.set_position([0.765, by, 0.085, 0.05])
         self.btn_reset.ax.set_position([0.858, by, 0.062, 0.05])
-        selector_y = by - 0.112
+        self.btn_analyze.ax.set_position([0.685, by - 0.062, 0.235, 0.048])
+        selector_y = by - 0.132
         self.btn_chem.ax.set_position([0.800, selector_y, 0.120, 0.072])
         self.view_label.set_position((0.685, selector_y + 0.080))
         self.ax_radio.set_position([0.685, selector_y, 0.105, 0.075])
@@ -417,6 +424,39 @@ class SwarmExplorer:
         self.hint.set_text("● parameters changed — press  Run  to apply")
         self.hint.set_color(DIRTY)
         self.fig.canvas.draw_idle()
+
+    def analyze(self):
+        if self.out is None:
+            self.status.set_text("Run a simulation first, then Analyze")
+            self.status.set_color(DIRTY)
+            self.fig.canvas.draw_idle()
+            return
+        self.btn_analyze.label.set_text("Analyzing...")
+        self.btn_analyze.ax.set_facecolor(RESET_CLR)
+        self.fig.canvas.draw_idle()
+        out_snapshot = self.out
+
+        def _run():
+            try:
+                from analysis_service import analyze_simulation, print_analysis
+                result = analyze_simulation(out_snapshot, n_frames=6)
+                print_analysis(result)
+                infect = "INFECTION" if result["infection_detected"] else "no infection"
+                self.status.set_text(
+                    f"Claude: {infect}  ·  {result['inflammation_level']} inflammation"
+                    f"  ·  {result['phase']}")
+                self.status.set_color(ANALYZE_CLR)
+                self.status.set_weight("bold")
+            except Exception as exc:
+                print(f"[analysis] error: {exc}")
+                self.status.set_text(f"Analysis error — check terminal")
+                self.status.set_color(DIRTY)
+            finally:
+                self.btn_analyze.label.set_text("Analyze with Claude")
+                self.btn_analyze.ax.set_facecolor(ANALYZE_CLR)
+                self.fig.canvas.draw_idle()
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _update_chem_button(self):
         label = "Chem: dynamic" if self.dynamic_chemokine else "Chem: static"
