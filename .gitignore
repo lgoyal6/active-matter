@@ -11,3 +11,6 @@ __pycache__/
 *.png
 *.mp4
 *.gif
+
+# trajectory dumps
+*.npz
