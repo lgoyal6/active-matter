@@ -18,6 +18,46 @@ def _dist_to_source(traj):
     return np.sqrt((d * d).sum(axis=-1))
 
 
+def unique_contacts(traj, contact_radius=None):
+    """Cumulative count of *distinct* cells that have touched the APC vs. time.
+
+    Wiebke 2025 Chapter 6's primary observable. The APC is the fixed particle at
+    the box centre (== source_position here). A cell "contacts" it the first time
+    its centre comes within ``contact_radius`` (default = r_excl, i.e. one cell
+    radius + one APC radius at rest). Each cell is counted at most once.
+
+    Note: our engine has no physical APC obstacle, so this counts entries into the
+    central contact region from the trajectory — a post-hoc approximation of
+    Wiebke's setup that preserves the qualitative trends (the APC is one obstacle
+    among hundreds). Returns a (n_steps,) cumulative-count array.
+    """
+    if contact_radius is None:
+        contact_radius = traj["params"].get("r_excl", 1.0)
+    d = _dist_to_source(traj)                       # (n_steps, N)
+    inside = d < contact_radius                      # (n_steps, N)
+    ever = inside.any(axis=0)                        # (N,) cells that ever touch
+    first = inside.argmax(axis=0)                    # (N,) first contact step
+    n_steps = d.shape[0]
+    new_per_step = np.bincount(first[ever], minlength=n_steps)
+    return np.cumsum(new_per_step)
+
+
+def contact_rate(traj, contact_radius=None, transient_frac=0.05):
+    """Slope of cumulative unique contacts vs. time (contacts per sim-time unit).
+
+    Fit is taken after a short transient (Wiebke starts at t=25 min) so the
+    initial relaxation from the packed lattice doesn't bias the rate.
+    """
+    counts = unique_contacts(traj, contact_radius)
+    n = len(counts)
+    start = max(1, int(n * transient_frac))
+    t = np.arange(start, n) * traj["params"]["dt"]
+    if len(t) < 2:
+        return 0.0
+    slope = np.polyfit(t, counts[start:], 1)[0]
+    return float(slope)
+
+
 def swarm_size(traj, R_swarm=None):
     """Fraction of cells within R_swarm of the source, per timestep.
 
