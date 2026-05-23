@@ -1,0 +1,13 @@
+# virtual environment
+.venv/
+venv/
+env/
+
+# python cruft
+__pycache__/
+*.pyc
+
+# generated figures / movies (regenerate from code)
+*.png
+*.mp4
+*.gif
