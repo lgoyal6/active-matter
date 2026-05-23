@@ -10,12 +10,12 @@ import numpy as np
 
 
 def _dist_to_source(traj):
-    """(n_steps, N) minimum-image distance of every cell to the source."""
-    src = np.array(traj["source_position"])
+    """(n_steps, N) minimum-image distance of every cell to the nearest source."""
+    srcs = np.array(traj.get("source_positions", [traj["source_position"]]))
     L = traj["box_size"]
-    d = traj["positions"] - src[None, None, :]
+    d = traj["positions"][:, :, None, :] - srcs[None, None, :, :]
     d = d - L * np.round(d / L)
-    return np.sqrt((d * d).sum(axis=-1))
+    return np.sqrt((d * d).sum(axis=-1)).min(axis=2)
 
 
 def unique_contacts(traj, contact_radius=None):

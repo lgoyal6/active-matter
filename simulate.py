@@ -70,13 +70,30 @@ DEFAULTS = dict(
     w_c=1.0,                 # chemotaxis weight
     # --- chemokine source (static Gaussian by default) ---
     sigma=8.0,               # Gaussian width of the source field
+    n_sources=1,             # number of chemokine source sites (1, 2, 3, or 4)
+    source_distance=15.0,    # source spacing; overlap if comparable to sigma
+    source_strength=1.0,     # source emission/field amplitude
+    source_1_strength=1.0,   # per-source amplitudes; active sources use first n values
+    source_2_strength=1.0,
+    source_3_strength=1.0,
+    source_4_strength=1.0,
     dynamic_chemokine=False,
     D_chem=0.2,
     lambda_chem=0.02,
     S_chem=0.1,
     # --- creative ingredients (all inert at these defaults) ---
     alpha=0.0,               # desensitization rate        (0 -> sensitivity frozen)
-    beta=0.01,               # sensitivity recovery rate
+    beta=0.05,               # sensitivity recovery rate
+    recovery_K=0.5,          # recovery quiet-zone scale; high total chemokine suppresses beta
+    w_escape=1.5,            # desensitized cells bias away from sources to find recovery space
+    alpha_1=None,            # optional per-source desensitization rates
+    alpha_2=None,
+    alpha_3=None,
+    alpha_4=None,
+    beta_1=None,             # optional per-source recovery rates
+    beta_2=None,
+    beta_3=None,
+    beta_4=None,
     k_rep=0.0,               # repulsion stiffness          (0 -> no excluded volume)
     r_excl=1.0,              # base cell radius * 2 (collision distance at rest)
     v_drift=0.0,             # drift magnitude              (0 -> no memory drift)
@@ -117,6 +134,48 @@ def _random_unit(n, dim, rng):
     return _normalize(v)
 
 
+def _source_positions(dim, L, n_sources, source_distance):
+    """Deterministic centered source layouts controlled by one spacing knob."""
+    n = max(1, min(int(round(n_sources)), 4))
+    center = np.full(dim, L / 2.0)
+    d = float(np.clip(source_distance, 0.0, 0.80 * L))
+    offsets = np.zeros((n, dim), dtype=float)
+
+    if n == 2:
+        offsets[:, 0] = [-d / 2.0, d / 2.0]
+    elif n == 3:
+        radius = d / np.sqrt(3.0) if d > 0.0 else 0.0
+        angles = np.deg2rad([90.0, 210.0, 330.0])
+        offsets[:, 0] = radius * np.cos(angles)
+        offsets[:, 1] = radius * np.sin(angles)
+    elif n == 4:
+        half = d / 2.0
+        offsets[:, :2] = [(-half, -half), (half, -half), (-half, half), (half, half)]
+
+    return np.mod(center[None, :] + offsets, L)
+
+
+def _source_strengths(params, n_sources):
+    """Per-source amplitudes, with source_strength kept as a global fallback."""
+    base = float(params.get("source_strength", 1.0))
+    vals = [
+        params.get("source_1_strength", base),
+        params.get("source_2_strength", base),
+        params.get("source_3_strength", base),
+        params.get("source_4_strength", base),
+    ]
+    strengths = np.array(vals[:n_sources], dtype=float)
+    return np.clip(strengths, 0.0, None)
+
+
+def _source_rates(params, base_name, n_sources):
+    """Per-source alpha/beta rates, falling back to the global slider value."""
+    base = float(params[base_name])
+    vals = [params.get(f"{base_name}_{i}", None) for i in range(1, 5)]
+    rates = np.array([base if v is None else v for v in vals[:n_sources]], dtype=float)
+    return np.clip(rates, 0.0, None)
+
+
 # ---------------------------------------------------------------------------
 # Unit conversion: dimensionless model -> physical biology units.
 # ---------------------------------------------------------------------------
@@ -135,27 +194,39 @@ def to_microns(x, params=None):
 # ---------------------------------------------------------------------------
 # Chemokine: static analytic Gaussian (any dimension)
 # ---------------------------------------------------------------------------
-def _chemokine_static(pos, source, sigma, L):
+def _chemokine_static(pos, sources, sigma, L, strengths):
     """
-    Static Gaussian centred on `source`, valid in 2D or 3D.
-      c    : (N,)     concentration in [0, 1]
-      grad : (N,dim)  gradient vector (points toward the source)
+    Static Gaussian sources, valid in 2D or 3D.
+      c_each    : (N,S)     concentration from each source
+      grad_each : (N,S,dim) gradient contribution from each source
     """
-    disp = _min_image(source[None, :] - pos, L)        # (N,dim) toward source
-    r2 = np.sum(disp**2, axis=1)
-    c = np.exp(-r2 / (2.0 * sigma**2))
-    grad = (c / sigma**2)[:, None] * disp
-    return c, grad
+    disp = _min_image(sources[:, None, :] - pos[None, :, :], L)  # (S,N,dim)
+    r2 = np.sum(disp**2, axis=2)
+    c_each = strengths[:, None] * np.exp(-r2 / (2.0 * sigma**2))
+    grad_each = (c_each / sigma**2)[:, :, None] * disp
+    return c_each.T, np.transpose(grad_each, (1, 0, 2))
 
 
-def _static_field_grid(dim, grid, L, source, sigma):
+def _static_field_grid(dim, grid, L, sources, sigma, strengths):
     """Render the static Gaussian on a (grid,)*dim lattice for plotting/analysis."""
     xs = (np.arange(grid) + 0.5) * (L / grid)
+    if dim == 2:
+        yy, xx = np.meshgrid(xs, xs, indexing="ij")
+        field = np.zeros((grid, grid), dtype=float)
+        for source, strength in zip(sources, strengths):
+            r2 = (_min_image(xx - source[0], L) ** 2
+                  + _min_image(yy - source[1], L) ** 2)
+            field = field + strength * np.exp(-r2 / (2.0 * sigma**2))
+        return field
+
     mesh = np.meshgrid(*([xs] * dim), indexing="ij")
-    r2 = np.zeros_like(mesh[0])
-    for ax, m in enumerate(mesh):
-        r2 = r2 + _min_image(m - source[ax], L) ** 2
-    return np.exp(-r2 / (2.0 * sigma**2))
+    field = np.zeros_like(mesh[0], dtype=float)
+    for source, strength in zip(sources, strengths):
+        r2 = np.zeros_like(mesh[0], dtype=float)
+        for ax, m in enumerate(mesh):
+            r2 = r2 + _min_image(m - source[ax], L) ** 2
+        field = field + strength * np.exp(-r2 / (2.0 * sigma**2))
+    return field
 
 
 # ---- dynamic secretion field (2D only) ----
@@ -179,13 +250,24 @@ def _sample_field(field, pos, L):
     return c, np.stack([gx, gy], axis=-1)
 
 
-def _diffuse(field, rho, D, lam, S, dt, h):
+def _sample_fields(fields, pos, L):
+    """Sample a stack of source-specific 2D fields: returns (N,S), (N,S,2)."""
+    samples = [_sample_field(field, pos, L) for field in fields]
+    c_each = np.stack([s[0] for s in samples], axis=1)
+    grad_each = np.stack([s[1] for s in samples], axis=1)
+    return c_each, grad_each
+
+
+def _diffuse(field, rho, D, lam, S, source_field, dt, h):
     lap = (
-        np.roll(field, 1, 0) + np.roll(field, -1, 0)
-        + np.roll(field, 1, 1) + np.roll(field, -1, 1)
+        np.roll(field, 1, -2) + np.roll(field, -1, -2)
+        + np.roll(field, 1, -1) + np.roll(field, -1, -1)
         - 4.0 * field
     ) / (h * h)
-    return field + dt * (D * lap - lam * field + S * rho)
+    source_count = field.shape[0] if field.ndim == 3 else 1
+    secretion = ((S / source_count) * rho[None, :, :]
+                 if field.ndim == 3 else S * rho)
+    return field + dt * (D * lap - lam * field + secretion + source_field)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +289,11 @@ def simulate(params=None, seed=0):
         r_cell = p["r_excl"] / 2.0
         p["N"] = max(1, int(round(p["rho"] * p["L"]**2 / (np.pi * r_cell**2))))
     N, L, dt, n_steps = p["N"], p["L"], p["dt"], p["n_steps"]
-    source = np.full(dim, L / 2.0)                    # source at box centre
+    sources = _source_positions(dim, L, p["n_sources"], p["source_distance"])
+    strengths = _source_strengths(p, len(sources))
+    alpha_src = _source_rates(p, "alpha", len(sources))
+    beta_src = _source_rates(p, "beta", len(sources))
+    source = sources[0]                               # compatibility anchor
 
     # secretion field PDE is only implemented in 2D; fall back to static in 3D
     dynamic = bool(p["dynamic_chemokine"]) and dim == 2
@@ -219,18 +305,24 @@ def simulate(params=None, seed=0):
     # --- initial state ---
     pos  = rng.uniform(0, L, size=(N, dim))           # uniform random positions
     head = _random_unit(N, dim, rng)                  # random unit heading vectors
-    s    = np.ones(N)                                 # sensitivity starts at 1
+    s_src = np.ones((N, len(sources)))                # sensitivity per source starts at 1
+    s    = s_src.mean(axis=1)                         # scalar summary for plotting
     d_vec = head.copy()                               # drift-memory direction
     # Per-cell random phase for active deformation — desynchronizes oscillations
     # so they don't all expand/contract at once, which would cause waves.
     phi_deform = rng.uniform(0, 2 * np.pi, N)
     if dynamic:
-        field = np.zeros((grid, grid))
+        field = np.zeros((len(sources), grid, grid))
+        source_field = np.stack([
+            _static_field_grid(dim, grid, L, sources[i:i + 1], p["sigma"], strengths[i:i + 1])
+            for i in range(len(sources))
+        ])
 
     # --- trajectory buffers ---
     pos_hist = np.empty((n_steps, N, dim))
     head_hist = np.empty((n_steps, N, dim))
     sen_hist = np.empty((n_steps, N))
+    src_sen_hist = np.empty((n_steps, N, len(sources)))
     if dynamic:
         fld_hist = np.empty((n_steps, grid, grid))
 
@@ -244,10 +336,12 @@ def simulate(params=None, seed=0):
         if dynamic:
             rho = _density_grid(pos, grid, L)
             field = _diffuse(field, rho, p["D_chem"], p["lambda_chem"],
-                             p["S_chem"], dt, h)
-            c, grad = _sample_field(field, pos, L)
+                             p["S_chem"], source_field, dt, h)
+            c_each, grad_each = _sample_fields(field, pos, L)
         else:
-            c, grad = _chemokine_static(pos, source, p["sigma"], L)
+            c_each, grad_each = _chemokine_static(
+                pos, sources, p["sigma"], L, strengths)
+        c = c_each.sum(axis=1)
 
         # ---- (2a) Pairwise geometry: who is near whom (periodic min image) ----
         diff = _min_image(pos[:, None, :] - pos[None, :, :], L)   # (N,N,dim): i - j
@@ -261,12 +355,42 @@ def simulate(params=None, seed=0):
         # ---- (2c) Combine steering urges and set the new heading ----
         #   persist  : keep current heading (ABP self-propulsion)
         #   w_a      : turn toward neighbors' mean heading (flocking)
-        #   w_c * s  : climb the chemokine gradient, GATED by sensitivity s
-        grad_hat = _normalize(grad)
+        #   w_c * s_src : climb each source's gradient, gated by that source's
+        #                 receptor state. Cells can desensitize near one source
+        #                 while staying responsive to another.
+        chem_vec = (s_src[:, :, None] * grad_each).sum(axis=1)
+        grad_hat = _normalize(chem_vec)
+        chem_gate = np.divide(
+            (c_each * s_src).sum(axis=1),
+            c_each.sum(axis=1),
+            out=np.zeros(N),
+            where=c_each.sum(axis=1) > 1e-12,
+        )
+        recovery_K = max(float(p["recovery_K"]), 1e-12)
+        quiet = np.exp(-c / recovery_K)
+        source_disp = _min_image(pos[:, None, :] - sources[None, :, :], L)
+        source_dist = np.linalg.norm(source_disp, axis=2, keepdims=True)
+        away_unit = np.divide(
+            source_disp, source_dist,
+            out=np.zeros_like(source_disp),
+            where=source_dist > 1e-12,
+        )
+        escape_weight = c_each * (1.0 - s_src)
+        escape_hat = _normalize((escape_weight[:, :, None] * away_unit).sum(axis=1))
+        escape_gate = np.divide(
+            escape_weight.sum(axis=1),
+            c_each.sum(axis=1),
+            out=np.zeros(N),
+            where=c_each.sum(axis=1) > 1e-12,
+        ) * (1.0 - quiet)
+        escape_vec = p["w_escape"] * escape_gate[:, None] * escape_hat
+        escape_drift = p["v0"] * escape_vec
+
         combined = (
             p["persist"] * head
             + p["w_a"] * align_vec
-            + p["w_c"] * s[:, None] * grad_hat
+            + p["w_c"] * chem_gate[:, None] * grad_hat
+            + escape_vec
         )
         head = _normalize(combined)
 
@@ -315,24 +439,31 @@ def simulate(params=None, seed=0):
             drift = 0.0
 
         # ---- (3) Integrate position (overdamped) and wrap periodically ----
-        pos = pos + dt * (p["v0"] * head + drift + f_rep)
+        pos = pos + dt * (p["v0"] * head + drift + escape_drift + f_rep)
         pos = np.mod(pos, L)
 
-        # ---- (4) Desensitization ODE: ds/dt = -alpha*c*s + beta*(1-s) ----
-        if p["alpha"] > 0.0 or p["beta"] > 0.0:
-            s = s + dt * (-p["alpha"] * c * s + p["beta"] * (1.0 - s))
-            np.clip(s, 0.0, 1.0, out=s)
+        # ---- (4) Source-aware receptor state ----
+        # ds_k/dt = -alpha_k*c_k*s_k + beta_k*quiet(c_total)*(1-s_k)
+        # A cell can go temporarily blind to the source it has been bathing in,
+        # while high total chemokine suppresses recovery by erasing quiet zones.
+        if np.any(alpha_src > 0.0) or np.any(beta_src > 0.0):
+            s_src = s_src + dt * (
+                -alpha_src[None, :] * c_each * s_src
+                + beta_src[None, :] * quiet[:, None] * (1.0 - s_src))
+            np.clip(s_src, 0.0, 1.0, out=s_src)
+        s = s_src.mean(axis=1)
 
         # ---- record this frame ----
         pos_hist[t] = pos
         head_hist[t] = head
         sen_hist[t] = s
+        src_sen_hist[t] = s_src
         if dynamic:
-            fld_hist[t] = field
+            fld_hist[t] = field.sum(axis=0)
 
     # static field rendered once for analysis/plots
     chem_out = fld_hist if dynamic else _static_field_grid(
-        dim, grid, L, source, p["sigma"])
+        dim, grid, L, sources, p["sigma"], strengths)
 
     # 2D heading angle for backward-compatible analysis; None in 3D
     ori_out = (np.arctan2(head_hist[:, :, 1], head_hist[:, :, 0])
@@ -343,10 +474,15 @@ def simulate(params=None, seed=0):
         "headings": head_hist,
         "orientations": ori_out,
         "sensitivity": sen_hist,
+        "source_sensitivity": src_sen_hist,
         "chemokine_field": chem_out,
         "params": p,
         "box_size": L,
         "source_position": tuple(float(x) for x in source),
+        "source_positions": [tuple(float(x) for x in src) for src in sources],
+        "source_strengths": [float(x) for x in strengths],
+        "source_alpha": [float(x) for x in alpha_src],
+        "source_beta": [float(x) for x in beta_src],
     }
 
 
