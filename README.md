@@ -1,4 +1,4 @@
-# T-cell Swarming — Active Matter Simulation
+# T-cell Swarming - Active Matter Simulation
 
 2D self-propelled-particle model of why T-cell swarms self-limit in vivo:
 ABP + Vicsek alignment + chemotaxis, plus desensitization, excluded volume,
@@ -57,12 +57,12 @@ shrinks quiet recovery space and can collapse the oscillation into exhaustion.
 
 ## Files
 
-- `simulate.py` — the canonical engine. `simulate(params, seed)` returns the
+- `simulate.py` - the canonical engine. `simulate(params, seed)` returns the
   hand-off contract dict. `DEFAULTS` is the single source of truth for all
   parameters and the µm / minute unit anchors.
-- `sanity_checks.py` — runnable sanity protocol.
-- `visualize.py` — static figures.
-- `interactive_sim.py` — interactive desktop explorer (needs a GUI backend).
+- `sanity_checks.py` - runnable sanity protocol.
+- `visualize.py` - static figures.
+- `interactive_sim.py` - interactive desktop explorer (needs a GUI backend).
 
 ## Analysis & sweep pipeline (Track A additions)
 
@@ -94,6 +94,6 @@ plot_phase_diagram(grids, "core_density")
 ```
 
 **Headline result:** in the `(alpha, k_rep)` sweep, the Keller-Segel pile-up
-(`core_density`) survives *only* at low-alpha / low-k_rep — **either** biochemical
+(`core_density`) survives *only* at low-alpha / low-k_rep - **either** biochemical
 desensitization or mechanical repulsion quenches the singular collapse, while
 `density_at_source` shows `alpha` setting overall retention at the infection site.
