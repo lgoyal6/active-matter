@@ -4,6 +4,61 @@
 ABP + Vicsek alignment + chemotaxis, plus desensitization, excluded volume,
 chemokine secretion, and drift-with-memory. See `SKILL.md` for the science.
 
+## One integration step
+
+`simulate()` is a single vectorized loop over `n_steps`. Every ingredient is a
+term added into one heading vector or one position update, and each creative
+ingredient is inert at its default, so the loop below collapses back to plain
+ABP plus Vicsek when nothing is switched on.
+
+```mermaid
+flowchart TB
+    Field["1 sample the chemokine field at each cell<br/>static: sum of Gaussians over n_sources<br/>dynamic 2D: diffuse, decay, secrete from cell density<br/>yields c_k and grad_k per cell, per source"]
+    Pairs["2a pairwise min-image displacements<br/>neighbours are cells closer than R"]
+    Alignment["2b Vicsek term<br/>sum of neighbour heading vectors"]
+
+    Head["2c new heading, then renormalized<br/>persist * current heading<br/>+ w_a * neighbour sum<br/>+ w_c * chem_gate * gradient direction<br/>+ w_escape * escape_gate * away-from-source"]
+
+    Noise["2d reorientation<br/>lambda_r > 0: Poisson tumble to a fresh random direction<br/>eta > 0: rotational-diffusion kick, then renormalize"]
+    Rep["2e excluded volume, only when k_rep > 0<br/>overlap against r_i + r_j<br/>deform_A > 0 makes each radius oscillate<br/>with its own random phase"]
+    Drift["2f drift with memory, only when v_drift > 0<br/>d is an exponential average of past headings"]
+
+    Move["3 overdamped step, then wrap into the box<br/>pos += dt * of v0 * heading + drift + escape drift + repulsion"]
+
+    Sens["4 per-source receptor state<br/>ds_k = dt * of -alpha_k * c_k * s_k<br/>plus beta_k * quiet * of 1 - s_k<br/>quiet = exp of -c_total / recovery_K<br/>clipped to 0 to 1"]
+
+    Field --> Pairs --> Alignment --> Head --> Noise --> Rep --> Drift --> Move --> Sens
+    Sens -. "next step: low s damps the chemotaxis gate<br/>and raises the escape gate" .-> Head
+    Move -. "next step: new positions resample c and grad,<br/>and feed secretion in the dynamic field" .-> Field
+
+    Selflimit["self-limiting cycle<br/>cell sits in high c, s falls,<br/>chemotaxis weakens and escape turns on,<br/>cell leaves, c drops, quiet rises,<br/>s recovers and the cell can return"]
+    Sens --- Selflimit
+```
+
+`quiet` is what makes the cycle close rather than run away: recovery is gated on
+low total chemokine, so adding sources or lowering `recovery_K` removes the
+quiet space a cell needs to resensitize, and the oscillation flattens into
+exhaustion.
+
+## The limit ladder
+
+`sanity_checks.py` is the acceptance test for the model, not for the code: a new
+ingredient is only trusted if switching it off reproduces the simpler model it
+was built on top of. Every run uses `seed=2`.
+
+```mermaid
+flowchart LR
+    Full["full model<br/>ABP + Vicsek + chemotaxis<br/>+ desensitization + excluded volume"]
+
+    Full -- "w_c = 0, eta = 0.1" --> L1["LIMIT 1 pure Vicsek<br/>expect no approach to the source,<br/>polar order high"]
+    Full -- "w_c = 0, eta = 1.2" --> L1b["LIMIT 1b Vicsek at high noise<br/>expect polar order collapses"]
+    Full -- "w_a = 0" --> L2["LIMIT 2 chemotaxis-only ABP<br/>expect mean distance to source falls"]
+    Full -- "alpha = 0 against alpha = 0.6" --> L3["LIMIT 3 desensitization<br/>expect alpha > 0 ends farther out<br/>run to 1500 steps, not 800"]
+    Full -- "k_rep = 0 against k_rep = 20" --> L4["LIMIT 4 excluded volume<br/>expect median nearest-neighbour<br/>distance rises toward r_excl"]
+
+    L1 & L1b & L2 & L3 & L4 --> Read["printed numbers, not assertions<br/>you read the comparison and judge it;<br/>the script always exits 0"]
+```
+
 ## Setup (one time)
 
 ```bash
