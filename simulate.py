@@ -111,6 +111,12 @@ DEFAULTS = dict(
     # Optimal omega_deform ≈ 0.5–1.0 rad/sim-time (~1–2 cycles/min).
     deform_A=0.0,
     omega_deform=0.5,
+    # Thesis-style APC is opt-in so the legacy default remains inert.
+    apc_mode="off",
+    apc_force_law="thesis_eq5_5_normalized",
+    apc_r0=1.0,
+    apc_record_trajectory=True,
+    apc_neighbor_skin=0.2,
 )
 
 
@@ -153,6 +159,121 @@ def _source_positions(dim, L, n_sources, source_distance):
         offsets[:, :2] = [(-half, -half), (half, -half), (-half, half), (half, half)]
 
     return np.mod(center[None, :] + offsets, L)
+
+
+APC_FORCE_LAWS = ("thesis_eq5_5_normalized", "zenodo_ch6_source_unnormalized")
+
+
+def _apc_hcp_positions(n_mobile, L, r0):
+    """Place a center APC and mobile cells on a nonoverlapping periodic HCP grid."""
+    n_total = n_mobile + 1
+    candidates = []
+    for nx in range(2, int(L / (2 * r0)) + 1):
+        dx = L / nx
+        for ny in range(4, int(L / (np.sqrt(3) * r0)) + 1, 4):
+            dy = L / ny
+            min_sep = min(dx, 2 * dy, np.hypot(dx / 2, dy))
+            if min_sep + 1e-12 < 2 * r0 or nx * ny < n_total:
+                continue
+            aspect_error = abs(dy / (np.sqrt(3) * dx / 2) - 1.0)
+            candidates.append((nx * ny - n_total, aspect_error, nx, ny))
+    if not candidates:
+        raise ValueError("requested APC density does not fit a nonoverlapping periodic HCP lattice")
+    _, _, nx, ny = min(candidates)
+    dx, dy = L / nx, L / ny
+    center = np.array([L / 2, L / 2], dtype=float)
+    points = np.asarray([
+        [col * dx + (row % 2) * dx / 2, row * dy]
+        for row in range(ny) for col in range(nx)
+    ])
+    center_idx = (ny // 2) * nx + nx // 2
+    points = np.mod(points + np.mod(center - points[center_idx], L), L)
+    available = np.asarray([i for i in range(len(points)) if i != center_idx])
+    selection = np.rint(np.linspace(0, len(available) - 1, n_mobile)).astype(int)
+    mobile_indices = available[selection]
+    mobile = points[mobile_indices]
+    all_points = np.concatenate([center[None, :], mobile], axis=0)
+    pair_diff = _min_image(all_points[:, None, :] - all_points[None, :, :], L)
+    pair_dist = np.linalg.norm(pair_diff, axis=2)
+    np.fill_diagonal(pair_dist, np.inf)
+    min_distance = float(np.min(pair_dist))
+    if min_distance + 1e-10 < 2 * r0:
+        raise RuntimeError("periodic HCP initialization contains an overlap")
+    return mobile, (nx, ny), min_distance
+
+
+def _apc_cell_radii(t, phi, r0, amplitude, omega):
+    """Begin radius oscillations at each phase's next mean-radius crossing."""
+    if amplitude <= 0.0 or omega <= 0.0:
+        return np.full(len(phi), r0)
+    start_time = (np.ceil(phi / np.pi) * np.pi - phi) / omega
+    active = t >= start_time
+    radii = np.full(len(phi), r0, dtype=float)
+    radii[active] += amplitude * np.sin(omega * t + phi[active])
+    return np.maximum(radii, 0.01)
+
+
+def _apc_pair_force(displacement, radius_i, radius_j, strength, law):
+    """Linear overlap repulsion with an explicit thesis/source-code convention."""
+    distance = float(np.linalg.norm(displacement))
+    threshold = float(radius_i + radius_j)
+    if distance <= 1e-12 or distance >= threshold or strength <= 0.0:
+        return np.zeros_like(displacement, dtype=float)
+    overlap = threshold - distance
+    scale = overlap / threshold if law == "thesis_eq5_5_normalized" else overlap
+    return float(strength) * scale * np.asarray(displacement, dtype=float) / distance
+
+
+def _apc_neighbor_pairs(pos, L, cutoff):
+    """Periodic cell-list candidate pairs, including every pair within cutoff."""
+    bins_per_axis = max(1, int(np.floor(L / cutoff)))
+    width = L / bins_per_axis
+    buckets = {}
+    indices = np.floor(np.mod(pos, L) / width).astype(int) % bins_per_axis
+    for i, cell in enumerate(indices):
+        buckets.setdefault((int(cell[0]), int(cell[1])), []).append(i)
+    pairs = set()
+    offsets = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0),
+               (0, 1), (1, -1), (1, 0), (1, 1))
+    for (bx, by), left in buckets.items():
+        for ox, oy in offsets:
+            right = buckets.get(((bx + ox) % bins_per_axis,
+                                 (by + oy) % bins_per_axis), ())
+            for i in left:
+                for j in right:
+                    if i < j:
+                        pairs.add((i, j))
+    return np.asarray(sorted(pairs), dtype=np.int64).reshape(-1, 2)
+
+
+def _apc_cell_forces(pos, radii, center, apc_radius, strength, law, L, pairs=None):
+    """Production sparse pair-force path; coincident centers get zero direction."""
+    force = np.zeros_like(pos, dtype=float)
+    if pairs is None:
+        i, j = np.triu_indices(len(pos), 1)
+    else:
+        i, j = pairs[:, 0], pairs[:, 1]
+    pair_disp = _min_image(pos[i] - pos[j], L)
+    distance = np.linalg.norm(pair_disp, axis=1)
+    threshold = radii[i] + radii[j]
+    overlap = np.maximum(threshold - distance, 0.0)
+    direction = np.divide(pair_disp, distance[:, None], out=np.zeros_like(pair_disp),
+                          where=(distance > 1e-12)[:, None])
+    scale = overlap / threshold if law == "thesis_eq5_5_normalized" else overlap
+    pair_force = float(strength) * scale[:, None] * direction
+    np.add.at(force, i, pair_force)
+    np.add.at(force, j, -pair_force)
+    target_displacement = _min_image(pos - center, L)
+    target_distance = np.linalg.norm(target_displacement, axis=1)
+    target_threshold = radii + float(apc_radius)
+    target_overlap = np.maximum(target_threshold - target_distance, 0.0)
+    target_direction = np.divide(target_displacement, target_distance[:, None],
+                                 out=np.zeros_like(target_displacement),
+                                 where=(target_distance > 1e-12)[:, None])
+    target_scale = (target_overlap / target_threshold
+                    if law == "thesis_eq5_5_normalized" else target_overlap)
+    force += float(strength) * target_scale[:, None] * target_direction
+    return force
 
 
 def _source_strengths(params, n_sources):
@@ -284,11 +405,44 @@ def simulate(params=None, seed=0):
     if dim not in (2, 3):
         raise ValueError("dim must be 2 or 3")
 
-    # Packing fraction → N override (Wiebke 2025 convention: rho = N·π·(r/2)²/L²)
-    if p["rho"] is not None:
+    apc_mode = p["apc_mode"]
+    if apc_mode not in ("off", "thesis"):
+        raise ValueError("apc_mode must be 'off' or 'thesis'")
+    apc_enabled = apc_mode == "thesis"
+    if apc_enabled:
+        if dim != 2:
+            raise ValueError("thesis APC mode is defined only for dim=2")
+        if p["apc_force_law"] not in APC_FORCE_LAWS:
+            raise ValueError(f"apc_force_law must be one of {APC_FORCE_LAWS}")
+        if p["apc_r0"] <= 0.0 or p["deform_A"] < 0.0:
+            raise ValueError("apc_r0 must be positive and deform_A nonnegative")
+        if p["deform_A"] >= p["apc_r0"]:
+            raise ValueError("thesis APC mode requires deform_A < apc_r0 to keep radii positive")
+        if p["apc_neighbor_skin"] < 0.0:
+            raise ValueError("apc_neighbor_skin must be nonnegative")
+        if p["rho"] is not None and not 0.0 < float(p["rho"]) < 0.9069:
+            raise ValueError("thesis APC rho must be between 0 and hexagonal close packing")
+
+    # The thesis density counts the fixed APC among total HCP slots; legacy rho is untouched.
+    if apc_enabled and p["rho"] is not None:
+        total_slots = max(2, int(round(p["rho"] * p["L"]**2 / (np.pi * p["apc_r0"]**2))))
+        p["N"] = total_slots - 1
+    elif p["rho"] is not None:
         r_cell = p["r_excl"] / 2.0
         p["N"] = max(1, int(round(p["rho"] * p["L"]**2 / (np.pi * r_cell**2))))
     N, L, dt, n_steps = p["N"], p["L"], p["dt"], p["n_steps"]
+    if apc_enabled:
+        apc_center = np.full(2, L / 2.0)
+        pos, apc_lattice_shape, apc_initial_min_distance = _apc_hcp_positions(
+            N, L, float(p["apc_r0"]))
+        p["N_mobile"] = int(N)
+        p["apc_total_slots"] = int(N + 1)
+        p["apc_achieved_rho"] = float((N + 1) * np.pi * p["apc_r0"]**2 / L**2)
+        p["apc_requested_rho"] = None if p["rho"] is None else float(p["rho"])
+        p["apc_lattice_shape"] = list(apc_lattice_shape)
+        p["apc_initial_min_center_distance"] = apc_initial_min_distance
+    else:
+        apc_center = None
     sources = _source_positions(dim, L, p["n_sources"], p["source_distance"])
     strengths = _source_strengths(p, len(sources))
     alpha_src = _source_rates(p, "alpha", len(sources))
@@ -303,7 +457,8 @@ def simulate(params=None, seed=0):
     h = L / grid
 
     # --- initial state ---
-    pos  = rng.uniform(0, L, size=(N, dim))           # uniform random positions
+    if not apc_enabled:
+        pos = rng.uniform(0, L, size=(N, dim))        # preserve legacy RNG draw order
     head = _random_unit(N, dim, rng)                  # random unit heading vectors
     s_src = np.ones((N, len(sources)))                # sensitivity per source starts at 1
     s    = s_src.mean(axis=1)                         # scalar summary for plotting
@@ -311,18 +466,37 @@ def simulate(params=None, seed=0):
     # Per-cell random phase for active deformation — desynchronizes oscillations
     # so they don't all expand/contract at once, which would cause waves.
     phi_deform = rng.uniform(0, 2 * np.pi, N)
+    if apc_enabled:
+        apc_ids = np.arange(1, N + 1, dtype=np.int64)
+        next_apc_id = N + 1
+        record_apc_trajectory = bool(p["apc_record_trajectory"])
+        radius_hist = np.empty((n_steps, N), dtype=np.float32) if record_apc_trajectory else None
+        id_hist = np.empty((n_steps, N), dtype=np.int64) if record_apc_trajectory else None
+        contact_event_hist = np.empty((n_steps, N), dtype=bool) if record_apc_trajectory else None
+        contact_id_hist = np.empty((n_steps, N), dtype=np.int64) if record_apc_trajectory else None
+        contact_curve = np.empty(n_steps, dtype=np.int32)
+        encountered_apc_ids = set()
+        contact_count = 0
+        all_finite = True
+        all_unit_headings = True
+        all_in_box = True
     if dynamic:
         field = np.zeros((len(sources), grid, grid))
         source_field = np.stack([
             _static_field_grid(dim, grid, L, sources[i:i + 1], p["sigma"], strengths[i:i + 1])
             for i in range(len(sources))
         ])
+    if apc_enabled and p["k_rep"] > 0.0:
+        apc_cutoff = 2.0 * (float(p["apc_r0"]) + float(p["deform_A"]))
+        neighbor_reference = pos.copy()
+        neighbor_pairs = _apc_neighbor_pairs(pos, L, apc_cutoff + float(p["apc_neighbor_skin"]))
 
     # --- trajectory buffers ---
-    pos_hist = np.empty((n_steps, N, dim))
-    head_hist = np.empty((n_steps, N, dim))
-    sen_hist = np.empty((n_steps, N))
-    src_sen_hist = np.empty((n_steps, N, len(sources)))
+    store_frames = not apc_enabled or record_apc_trajectory
+    pos_hist = np.empty((n_steps, N, dim)) if store_frames else None
+    head_hist = np.empty((n_steps, N, dim)) if store_frames else None
+    sen_hist = np.empty((n_steps, N)) if store_frames else None
+    src_sen_hist = np.empty((n_steps, N, len(sources))) if store_frames else None
     if dynamic:
         fld_hist = np.empty((n_steps, grid, grid))
 
@@ -344,13 +518,18 @@ def simulate(params=None, seed=0):
         c = c_each.sum(axis=1)
 
         # ---- (2a) Pairwise geometry: who is near whom (periodic min image) ----
-        diff = _min_image(pos[:, None, :] - pos[None, :, :], L)   # (N,N,dim): i - j
-        dist = np.sqrt(np.sum(diff**2, axis=2))                   # (N,N)
-        np.fill_diagonal(dist, np.inf)                            # exclude self
+        # Preserve the legacy dense path exactly. APC studies set w_a=0, so no
+        # alignment geometry is needed in that opt-in case.
+        if apc_enabled and p["w_a"] == 0.0:
+            align_vec = np.zeros_like(head)
+        else:
+            diff = _min_image(pos[:, None, :] - pos[None, :, :], L)   # (N,N,dim): i - j
+            dist = np.sqrt(np.sum(diff**2, axis=2))                   # (N,N)
+            np.fill_diagonal(dist, np.inf)                            # exclude self
 
-        # ---- (2b) Vicsek alignment: sum neighbor heading vectors within R ----
-        neigh = dist < p["R"]                                     # (N,N) bool
-        align_vec = neigh.astype(float) @ head                    # (N,dim)
+            # ---- (2b) Vicsek alignment: sum neighbor heading vectors within R ----
+            neigh = dist < p["R"]                                     # (N,N) bool
+            align_vec = neigh.astype(float) @ head                    # (N,dim)
 
         # ---- (2c) Combine steering urges and set the new heading ----
         #   persist  : keep current heading (ABP self-propulsion)
@@ -411,7 +590,39 @@ def simulate(params=None, seed=0):
         # with a random per-cell phase phi_deform. This "fluidizes" the crowd —
         # cells periodically shrink, creating gaps that let others squeeze through.
         # Collision threshold between cells i and j = r_i + r_j.
-        if p["k_rep"] > 0.0:
+        if apc_enabled:
+            t_now = t * dt
+            r_cell = _apc_cell_radii(
+                t_now, phi_deform, float(p["apc_r0"]),
+                float(p["deform_A"]), float(p["omega_deform"]))
+            target_distance = np.linalg.norm(_min_image(pos - apc_center, L), axis=1)
+            contact_now = target_distance < r_cell + float(p["apc_r0"])
+            if record_apc_trajectory:
+                contact_event_hist[t] = contact_now
+                contact_id_hist[t] = apc_ids
+            for cell in np.flatnonzero(contact_now):
+                identity = int(apc_ids[cell])
+                if identity not in encountered_apc_ids:
+                    encountered_apc_ids.add(identity)
+                    contact_count += 1
+            contact_curve[t] = contact_count
+            if p["k_rep"] > 0.0:
+                displacement_from_reference = _min_image(pos - neighbor_reference, L)
+                if (p["apc_neighbor_skin"] == 0.0 or
+                        np.max(np.linalg.norm(displacement_from_reference, axis=1)) > p["apc_neighbor_skin"] / 2.0):
+                    neighbor_reference = pos.copy()
+                    neighbor_pairs = _apc_neighbor_pairs(
+                        pos, L, apc_cutoff + float(p["apc_neighbor_skin"]))
+                f_rep = _apc_cell_forces(
+                    pos, r_cell, apc_center, float(p["apc_r0"]), float(p["k_rep"]),
+                    p["apc_force_law"], L, neighbor_pairs)
+            else:
+                f_rep = np.zeros_like(pos)
+            if record_apc_trajectory:
+                radius_hist[t] = _apc_cell_radii(
+                    t_now + dt, phi_deform, float(p["apc_r0"]),
+                    float(p["deform_A"]), float(p["omega_deform"]))
+        elif p["k_rep"] > 0.0:
             t_now = t * dt                                         # current sim time
             if p["deform_A"] > 0.0:
                 r_cell = (p["r_excl"] / 2.0
@@ -439,8 +650,13 @@ def simulate(params=None, seed=0):
             drift = 0.0
 
         # ---- (3) Integrate position (overdamped) and wrap periodically ----
-        pos = pos + dt * (p["v0"] * head + drift + escape_drift + f_rep)
-        pos = np.mod(pos, L)
+        pos_unwrapped = pos + dt * (p["v0"] * head + drift + escape_drift + f_rep)
+        if apc_enabled:
+            wrapped = np.any((pos_unwrapped < 0.0) | (pos_unwrapped >= L), axis=1)
+            for cell in np.flatnonzero(wrapped):
+                apc_ids[cell] = next_apc_id
+                next_apc_id += 1
+        pos = np.mod(pos_unwrapped, L)
 
         # ---- (4) Source-aware receptor state ----
         # ds_k/dt = -alpha_k*c_k*s_k + beta_k*quiet(c_total)*(1-s_k)
@@ -454,10 +670,17 @@ def simulate(params=None, seed=0):
         s = s_src.mean(axis=1)
 
         # ---- record this frame ----
-        pos_hist[t] = pos
-        head_hist[t] = head
-        sen_hist[t] = s
-        src_sen_hist[t] = s_src
+        if store_frames:
+            pos_hist[t] = pos
+            head_hist[t] = head
+            sen_hist[t] = s
+            src_sen_hist[t] = s_src
+        if apc_enabled:
+            if record_apc_trajectory:
+                id_hist[t] = apc_ids
+            all_finite = all_finite and bool(np.isfinite(pos).all() and np.isfinite(head).all())
+            all_unit_headings = all_unit_headings and bool(np.allclose(np.linalg.norm(head, axis=1), 1.0, atol=1e-8))
+            all_in_box = all_in_box and bool((pos >= 0.0).all() and (pos < L).all())
         if dynamic:
             fld_hist[t] = field.sum(axis=0)
 
@@ -467,9 +690,9 @@ def simulate(params=None, seed=0):
 
     # 2D heading angle for backward-compatible analysis; None in 3D
     ori_out = (np.arctan2(head_hist[:, :, 1], head_hist[:, :, 0])
-               if dim == 2 else None)
+               if dim == 2 and store_frames else None)
 
-    return {
+    result = {
         "positions": pos_hist,
         "headings": head_hist,
         "orientations": ori_out,
@@ -484,6 +707,24 @@ def simulate(params=None, seed=0):
         "source_alpha": [float(x) for x in alpha_src],
         "source_beta": [float(x) for x in beta_src],
     }
+    if apc_enabled:
+        result.update({
+            "apc_center": tuple(float(x) for x in apc_center),
+            "apc_radius": float(p["apc_r0"]),
+            # Contact checks occur before movement; stored state frames are after it.
+            "contact_event_time_offset": 0.0,
+            "position_frame_time_offset": float(dt),
+        })
+        if record_apc_trajectory:
+            result.update({"cell_radii": radius_hist, "trajectory_ids": id_hist,
+                           "contact_events": contact_event_hist,
+                           "contact_event_ids": contact_id_hist})
+        else:
+            result.update({"contact_curve": contact_curve, "all_finite": all_finite,
+                           "all_unit_headings": all_unit_headings, "all_in_box": all_in_box,
+                           "final_positions": pos.copy(), "final_headings": head.copy(),
+                           "final_ids": apc_ids.copy()})
+    return result
 
 
 if __name__ == "__main__":
