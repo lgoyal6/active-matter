@@ -31,6 +31,28 @@ def unique_contacts(traj, contact_radius=None):
     Wiebke's setup that preserves the qualitative trends (the APC is one obstacle
     among hundreds). Returns a (n_steps,) cumulative-count array.
     """
+    if traj["params"].get("apc_mode", "off") == "thesis":
+        if contact_radius is not None:
+            raise ValueError("APC mode uses its time-varying surface-contact definition; contact_radius override is unsupported")
+        if "contact_curve" in traj:
+            return np.asarray(traj["contact_curve"])
+        center = np.asarray(traj["apc_center"], dtype=float)
+        L = traj["box_size"]
+        disp = traj["positions"] - center
+        disp -= L * np.round(disp / L)
+        dist = np.linalg.norm(disp, axis=-1)
+        radii = np.asarray(traj["cell_radii"])
+        inside = np.asarray(traj.get("contact_events", dist < radii + float(traj["apc_radius"])))
+        ids = np.asarray(traj.get("contact_event_ids", traj["trajectory_ids"]))
+        encountered = set()
+        new_per_step = np.zeros(len(inside), dtype=int)
+        for step in range(len(inside)):
+            for cell in np.flatnonzero(inside[step]):
+                identity = int(ids[step, cell])
+                if identity not in encountered:
+                    encountered.add(identity)
+                    new_per_step[step] += 1
+        return np.cumsum(new_per_step)
     if contact_radius is None:
         contact_radius = traj["params"].get("r_excl", 1.0)
     d = _dist_to_source(traj)                       # (n_steps, N)
