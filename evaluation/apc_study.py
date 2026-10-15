@@ -59,7 +59,11 @@ def build_protocol(rhos, seeds, steps, laws, dt, pilot=False):
             "fit": "ordinary_least_squares_cumulative_contacts_vs_time",
             "pilot_warmup_only": bool(pilot),
             "engine_defaults": {k: (v.item() if isinstance(v, np.generic) else v)
-                               for k, v in DEFAULTS.items()}}
+                               for k, v in DEFAULTS.items()},
+            "summary": {"per_density_law": "retain four per-seed slopes; report mean, sample SD, and SE",
+                        "independent_units": "seed runs, not correlated timesteps",
+                        "paired_law_contrast": "descriptive per-seed paired slope differences",
+                        "intervals": "descriptive n=4", "timepoint_bootstrap": False}}
 
 
 def _load_manifest(path, raw_dir, protocol_hash, source_hash, resume, expected_keys):

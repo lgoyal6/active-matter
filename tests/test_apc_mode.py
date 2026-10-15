@@ -204,3 +204,13 @@ def test_runner_rejects_arguments_outside_protocol_grid(tmp_path):
     protocol = build_protocol([0.2], [7], 2, ["law"], 0.1)
     with pytest.raises(ValueError, match="do not match the frozen protocol grid"):
         run([0.3], [7], 2, ["law"], 0.1, tmp_path, protocol)
+
+
+def test_study_protocol_binds_seed_level_summary_plan():
+    from evaluation.apc_study import build_protocol
+
+    protocol = build_protocol([0.2], [11, 23, 37, 53], 500_000,
+                              ["law-a", "law-b"], 0.001)
+    assert protocol["min_per_time"] == 1.0
+    assert protocol["summary"]["independent_units"] == "seed runs, not correlated timesteps"
+    assert protocol["summary"]["timepoint_bootstrap"] is False
