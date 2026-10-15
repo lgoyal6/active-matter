@@ -129,6 +129,24 @@ def check_speed_calibration():
     return ok
 
 
+def check_apc_obstacle_packing_fraction(raw_dir):
+    """Explicit heavyweight APC study; caller supplies private raw-output path."""
+    from pathlib import Path
+    from evaluation.apc_study import build_protocol, run
+
+    rhos, seeds, steps, dt = [0.2, 0.5, 0.71, 0.85], [11, 23, 37, 53], 500_000, 0.001
+    laws = ["thesis_eq5_5_normalized", "zenodo_ch6_source_unnormalized"]
+    rows = run(rhos, seeds, steps, laws, dt, Path(raw_dir),
+               build_protocol(rhos, seeds, steps, laws, dt))
+    by_law = {}
+    for row in rows:
+        by_law.setdefault(row["law"], {}).setdefault(row["requested_rho"], []).append(row["contact_rate"])
+    for law, curve in by_law.items():
+        means = {rho: float(np.mean(values)) for rho, values in curve.items()}
+        print(f"APC density diagnostics ({law}): {means}; intermediate_peak={means[0.5] > means[0.2] and means[0.5] > means[0.85]}")
+    return rows
+
+
 def run_all():
     print("Validating engine against Wiebke 2025 thesis, Chapter 6 regime...\n")
     results = [
