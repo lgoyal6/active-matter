@@ -19,17 +19,11 @@ def _dist_to_source(traj):
 
 
 def unique_contacts(traj, contact_radius=None):
-    """Cumulative count of *distinct* cells that have touched the APC vs. time.
+    """Return cumulative counts of distinct cells contacting the APC.
 
-    Wiebke 2025 Chapter 6's primary observable. The APC is the fixed particle at
-    the box centre (== source_position here). A cell "contacts" it the first time
-    its centre comes within ``contact_radius`` (default = r_excl, i.e. one cell
-    radius + one APC radius at rest). Each cell is counted at most once.
-
-    Note: our engine has no physical APC obstacle, so this counts entries into the
-    central contact region from the trajectory — a post-hoc approximation of
-    Wiebke's setup that preserves the qualitative trends (the APC is one obstacle
-    among hundreds). Returns a (n_steps,) cumulative-count array.
+    In thesis mode, contacts use the moving APC surface. In off mode, the
+    function counts entries into a central region after simulation, so the APC
+    does not affect cell motion. Returns one count per saved timestep.
     """
     if traj["params"].get("apc_mode", "off") == "thesis":
         if contact_radius is not None:

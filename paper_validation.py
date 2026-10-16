@@ -12,10 +12,10 @@ the centre, measuring cumulative unique contacts. That regime is:
     desensitization), eta=0 (Poisson reorientation only via lambda_r).
 
 Each check is tied to a specific thesis figure. Trends are asserted, not exact
-numbers: our engine differs from Wiebke's in force form and has no physical APC
-obstacle (contacts are counted post-hoc against the central region), and our
-omega_deform is in rad/sim-time rather than the thesis's oscillations/min — so
-absolute optima differ, but the qualitative findings should hold.
+numbers: these legacy checks use APC-off mode, where contacts are counted after
+simulation and do not affect cell motion. The engine also differs from Wiebke's
+in force form, and omega_deform is in rad/sim-time rather than oscillations/min.
+Absolute optima can differ, so these checks assess qualitative trends only.
 """
 
 import numpy as np
