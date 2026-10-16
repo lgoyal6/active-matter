@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Active Matter | Live simulator</title><link rel="stylesheet" href="/live.css"><script src="/live.js" defer></script></head>
+<body><header><strong>Active Matter</strong><a href="/study">Recorded APC study</a><a href="https://github.com/lgoyal6/active-matter">Source</a></header>
+<main><h1>Run a new swarm experiment.</h1><p>Change the inputs and run the repository’s NumPy particle simulator. Every result is computed from your inputs, not selected from a recording.</p>
+<p class="notice">Live CPU simulation with synthetic particles. This small ABP/Vicsek/chemotaxis run is separate from the frozen APC study and does not establish biological effectiveness.</p>
+<div class="layout"><form id="experiment"><h2>Experiment inputs</h2>
+<label>Random seed<input name="seed" type="number" min="0" max="2147483647" value="1" required></label>
+<label>Particles<input name="particles" type="number" min="8" max="96" value="48" required></label>
+<label>Simulation steps<input name="steps" type="number" min="20" max="400" value="200" required></label>
+<label>Alignment strength<input name="alignment" type="number" min="0" max="2" step="0.1" value="0.5" required></label>
+<label>Chemotaxis strength<input name="chemotaxis" type="number" min="0" max="2" step="0.1" value="1" required></label>
+<label>Heading noise<input name="noise" type="number" min="0" max="1" step="0.1" value="0.3" required></label>
+<button id="run" type="submit">Run simulation</button><button id="cancel" type="button" disabled>Cancel request</button>
+<p class="small">At most 96 particles and 400 steps. Cancel stops waiting for the response; the bounded server calculation may finish.</p></form>
+<section aria-labelledby="result-title"><h2 id="result-title">Computed trajectory</h2><p id="status" role="status" aria-live="polite">Choose inputs and run an experiment.</p>
+<canvas id="swarm" width="600" height="600" aria-label="Computed particle positions in a periodic box"></canvas>
+<label>Trajectory frame<input id="frame" type="range" min="0" max="0" value="0" disabled></label><p id="frame-label"></p>
+<dl id="metrics"></dl><details><summary>Source and result fingerprints</summary><pre id="receipt">No run yet.</pre></details></section></div>
+</main></body></html>
