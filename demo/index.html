@@ -1,0 +1,41 @@
+<!-- Static explorer for the frozen APC sweep and its independent raw-curve review. -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore 32 verified active-matter APC simulator runs across two force laws, four densities, and four seeds.">
+  <title>Active Matter | APC study explorer</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="#top"><span class="brand-mark">A</span>Active Matter</a><span class="top-label">S13 / FROZEN CPU STUDY</span><a class="repo-link" href="https://github.com/lgoyal6/active-matter" target="_blank" rel="noreferrer">Source repo ↗</a></header>
+  <main id="top">
+    <section class="hero">
+      <p class="eyebrow"><span class="status-dot"></span> 32 curves independently reconstructed</p>
+      <h1>Explore how density<br><em>shapes simulated contacts.</em></h1>
+      <p class="lede">This explorer shows a frozen active-matter sweep with two APC force laws. Select a law to compare contact-rate slopes across density and seed.</p>
+      <div class="notice"><strong>Interpretation boundary</strong><span>These are descriptive results from a specific simulator and parameterization. They do not establish biological or clinical effectiveness.</span></div>
+    </section>
+
+    <section class="study-strip"><div><strong id="cases">32</strong><span>verified raw curves</span></div><div><strong id="groups">8</strong><span>law and density groups</span></div><div><strong id="seeds">4</strong><span>independent seeds per group</span></div><div><strong id="steps">500K</strong><span>simulation steps per run</span></div></section>
+
+    <section class="panel explorer">
+      <div class="section-head"><div><p class="eyebrow">Compare force laws</p><h2>Contact-rate slope by density</h2></div><label for="law">Force law <select id="law"></select></label></div>
+      <p class="chart-note" id="metric-note"></p>
+      <div class="chart-scroll"><svg id="density-chart" viewBox="0 0 820 390" role="img" aria-label="Contact-rate slope by density, with four seed points and mean with one standard deviation"></svg></div>
+      <div class="legend"><span><i class="seed-point"></i> Seed run</span><span><i class="mean-point"></i> Group mean and sample SD</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Density</th><th>Mean slope</th><th>Sample SD</th><th>SE</th><th>Seed values</th></tr></thead><tbody id="density-table"></tbody></table></div>
+    </section>
+
+    <section class="grid-two">
+      <article class="panel"><p class="eyebrow">Study design</p><h2>What is being compared?</h2><p>The simulator ran four requested densities, four seeds, and two force-law implementations. Each run used 500,000 steps. The slope is fit after a 25-minute transient and summarized across the four seeded runs.</p></article>
+      <article class="panel"><p class="eyebrow">Open evidence gap</p><h2>Simulation is not a biological result.</h2><p>The behavior-cloning model and its 10,000-trajectory asset remain unverified. Independent biological validation is also absent. These results support simulator analysis only.</p></article>
+    </section>
+
+    <details class="panel methods"><summary>Methods and limitations</summary><ul id="limits"></ul><p class="provenance" id="provenance"></p></details>
+    <footer><span>Static explorer of a recorded CPU study. It does not rerun the model.</span><span id="source-ref"></span></footer>
+  </main>
+</body>
+</html>

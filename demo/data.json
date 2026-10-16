@@ -1,0 +1,154 @@
+{
+  "schema": "active-matter-apc-explorer-v1",
+  "source": {
+    "repository": "lgoyal6/active-matter",
+    "commit": "f73e2dee4a891cec0951edbd7ded8d65eff40c4c",
+    "study_source_sha256": "3c725e921cb323b9e0f950cf57573291810aab9a0f6a82b85eed04deb854e11d",
+    "protocol_sha256": "b928d0383b3991740bd13badb728f1de539bef7a6f08aee7c3199d54e3585ee5",
+    "math_review_sha256": "3ce1e9896bcae946af98ecc689c91d33a445e8f5870d541f49fec5432f1b8e5e",
+    "overlay_sha256": "dd58aeda063bfa14fbbfe86a362757f927c91dd865341f4e2d8ae98cf732757c"
+  },
+  "study": {
+    "cases": 32,
+    "raw_curves_verified": 32,
+    "densities": [
+      0.2,
+      0.5,
+      0.71,
+      0.85
+    ],
+    "seeds": [
+      11,
+      23,
+      37,
+      53
+    ],
+    "steps_per_case": 500000,
+    "laws": [
+      "thesis_eq5_5_normalized",
+      "zenodo_ch6_source_unnormalized"
+    ],
+    "metric": "Contact-rate slope in contacts per simulation minute, fit after the 25-minute transient.",
+    "independent_unit": "One seeded run. Timesteps are correlated and are not independent replicates."
+  },
+  "rows": [
+    {
+      "law": "thesis_eq5_5_normalized",
+      "rho": 0.2,
+      "n": 4,
+      "seed_slopes": [
+        0.1252313480103197,
+        0.13450703073247428,
+        0.13699283102318655,
+        0.1750979379165585
+      ],
+      "mean": 0.14295728692063475,
+      "sample_sd": 0.022016750596550682,
+      "se": 0.011008375298275341
+    },
+    {
+      "law": "thesis_eq5_5_normalized",
+      "rho": 0.5,
+      "n": 4,
+      "seed_slopes": [
+        0.1995969307854771,
+        0.22862756291548125,
+        0.22022435562825232,
+        0.2220277634496687
+      ],
+      "mean": 0.21761915319471986,
+      "sample_sd": 0.012546028710951914,
+      "se": 0.006273014355475957
+    },
+    {
+      "law": "thesis_eq5_5_normalized",
+      "rho": 0.71,
+      "n": 4,
+      "seed_slopes": [
+        0.1855588444260972,
+        0.19079014630141186,
+        0.17833728042700298,
+        0.18348208419527187
+      ],
+      "mean": 0.184542088837446,
+      "sample_sd": 0.005154133333284015,
+      "se": 0.0025770666666420075
+    },
+    {
+      "law": "thesis_eq5_5_normalized",
+      "rho": 0.85,
+      "n": 4,
+      "seed_slopes": [
+        0.13525311480209004,
+        0.1295487244014116,
+        0.12461576396129292,
+        0.11596182344393136
+      ],
+      "mean": 0.12634485665218148,
+      "sample_sd": 0.008173513564297756,
+      "se": 0.004086756782148878
+    },
+    {
+      "law": "zenodo_ch6_source_unnormalized",
+      "rho": 0.2,
+      "n": 4,
+      "seed_slopes": [
+        0.16043317140988908,
+        0.1510908981265259,
+        0.14376224436928334,
+        0.15010573530028562
+      ],
+      "mean": 0.15134801230149597,
+      "sample_sd": 0.006872489868863893,
+      "se": 0.0034362449344319465
+    },
+    {
+      "law": "zenodo_ch6_source_unnormalized",
+      "rho": 0.5,
+      "n": 4,
+      "seed_slopes": [
+        0.18478981280334766,
+        0.25350329566961866,
+        0.19573759842213242,
+        0.19975075420679989
+      ],
+      "mean": 0.20844536527547466,
+      "sample_sd": 0.030696828577772787,
+      "se": 0.015348414288886393
+    },
+    {
+      "law": "zenodo_ch6_source_unnormalized",
+      "rho": 0.71,
+      "n": 4,
+      "seed_slopes": [
+        0.15310966706252668,
+        0.1485686540948413,
+        0.1841879100312231,
+        0.1770971790941991
+      ],
+      "mean": 0.16574085257069754,
+      "sample_sd": 0.017546997168521847,
+      "se": 0.008773498584260924
+    },
+    {
+      "law": "zenodo_ch6_source_unnormalized",
+      "rho": 0.85,
+      "n": 4,
+      "seed_slopes": [
+        0.08435716985867857,
+        0.0894636339225053,
+        0.09884851902295218,
+        0.09194793367177419
+      ],
+      "mean": 0.09115431411897756,
+      "sample_sd": 0.00602467677475971,
+      "se": 0.003012338387379855
+    }
+  ],
+  "limits": [
+    "Four seed runs per density and force law.",
+    "Descriptive simulator results, not external biological effectiveness or clinical evidence.",
+    "The behavior-cloning model and 10,000-trajectory asset are not supplied or verified.",
+    "Force-law contrasts depend on this model and parameterization; they are not exact thesis replication."
+  ]
+}
